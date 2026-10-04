@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+html, body, #root { height: 100%; }
+body { @apply bg-paper text-ink font-sans text-[15px] antialiased; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid #177E89; outline-offset: 2px; }
+.leaflet-container { font-family: inherit; }
+.rs-pin { background: none; border: 0; }
+@layer components {
+  .btn { @apply flex h-12 w-full items-center justify-center gap-2 rounded-xl px-4 text-[15px] font-medium transition-colors disabled:opacity-50; }
+  .btn-primary { @apply btn bg-navy text-white active:bg-ink; }
+  .btn-secondary { @apply btn border border-navy bg-white text-navy active:bg-tint; }
+  .field { @apply h-12 w-full rounded-xl border border-line bg-white px-3 text-base text-ink placeholder:text-muted; }
+}
+.leaflet-popup-content-wrapper { border-radius: 8px; box-shadow: 0 2px 8px rgba(20,33,43,.16); padding: 0; }
+.leaflet-popup-content { margin: 10px 12px; font-size: 14px; line-height: 1.35; }
+.leaflet-tooltip { border-radius: 8px; border: 1px solid #DCE2E6; box-shadow: 0 2px 8px rgba(20,33,43,.12); color: #14212B; padding: 8px 10px; }
+@keyframes sheet { from { transform: translateY(16px); opacity: 0 } to { transform: none; opacity: 1 } }
+.sheet-in { animation: sheet .2s ease-out; }
+@media (prefers-reduced-motion: reduce) { .sheet-in { animation: none; } }

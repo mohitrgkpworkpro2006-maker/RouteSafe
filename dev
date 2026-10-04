@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+#
+# RouteSafe dev runner.
+#
+#   ./dev            start backend + frontend, open the browser, stream logs
+#   ./dev stop       stop both
+#   ./dev restart    stop, then start
+#
+# Press Ctrl+C while attached to stop both servers.
+#
+# Design notes:
+#  - Readiness is polled, never guessed with sleep, so the browser only opens
+#    once both servers genuinely answer.
+#  - Each server runs in its own process group (setsid) so that Ctrl+C can reap
+#    the whole npm -> sh -> vite -> esbuild chain instead of orphaning Vite.
+#  - Ports are only ever taken from processes that belong to this project.
+#    Anything else is reported and left alone.
+
+set -uo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT" || exit 1
+
+BACKEND_PORT=8000
+FRONTEND_PORT=5173
+APP_URL="http://localhost:$FRONTEND_PORT"
+LOG_DIR="$ROOT/logs"
+BACKEND_LOG="$LOG_DIR/backend.log"
+FRONTEND_LOG="$LOG_DIR/frontend.log"
+BACKEND_PID=""
+FRONTEND_PID=""
+TAIL_PID=""
+
+if [ -t 1 ]; then
+  B=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[32m'
+  YLW=$'\033[33m'; RST=$'\033[0m'
+else
+  B=""; DIM=""; RED=""; GRN=""; YLW=""; RST=""
+fi
+
+say()  { printf '%s\n' "$*"; }
+head1() { printf '\n%s==>%s %s%s%s\n' "$B" "$RST" "$B" "$*" "$RST"; }
+ok()   { printf '    %sOK%s   %s\n' "$GRN" "$RST" "$*"; }
+info() { printf '    %s..%s   %s\n' "$DIM" "$RST" "$*"; }
+warn() { printf '    %swarn%s %s\n' "$YLW" "$RST" "$*"; }
+die()  { printf '\n    %sfail%s %s\n\n' "$RED" "$RST" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- port helpers
+
+# PID listening on the given TCP port, empty when free.
+port_pid() {
+  ss -ltnpH "sport = :$1" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1
+}
+
+# True only when the PID is part of this project (cwd or command line matches).
+belongs_to_project() {
+  local pid=$1
+  [ -n "$pid" ] || return 1
+  [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null)" = "$ROOT" ] && return 0
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF -- "$ROOT"
+}
+
+# Free a port, but only from one of our own processes.
+free_port() {
+  local port=$1 label=$2 pid waited=0
+  pid=$(port_pid "$port")
+  if [ -z "$pid" ]; then
+    return 0
+  fi
+  if ! belongs_to_project "$pid"; then
+    say ""
+    say "    ${RED}Port $port is held by PID $pid, which is not part of this project.${RST}"
+    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-160 | sed 's/^/         /'
+    say "    Stop it yourself, then run ./dev again."
+    say ""
+    exit 1
+  fi
+  info "reclaiming $port from stale $label (PID $pid)"
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+  while [ "$waited" -lt 40 ] && [ -n "$(port_pid "$port")" ]; do
+    sleep 0.25
+    waited=$((waited + 1))
+  done
+  if [ -n "$(port_pid "$port")" ]; then
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+    sleep 0.3
+  fi
+  ok "port $port is free"
+}
+
+# ------------------------------------------------------------------ lifecycle
+
+stop_all() {
+  local pid
+  if [ -n "$TAIL_PID" ]; then
+    kill -TERM "$TAIL_PID" 2>/dev/null
+    TAIL_PID=""
+  fi
+  for pid in "$BACKEND_PID" "$FRONTEND_PID"; do
+    [ -n "$pid" ] || continue
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+  done
+  BACKEND_PID=""
+  FRONTEND_PID=""
+  free_port "$BACKEND_PORT"  "backend"
+  free_port "$FRONTEND_PORT" "frontend"
+}
+
+# Poll a probe command until it succeeds. Aborts early if the server died.
+await_ready() {
+  local name=$1 pid=$2 probe=$3 ticks=$4 tick=0
+  while [ "$tick" -lt "$ticks" ]; do
+    if eval "$probe" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 2
+    fi
+    sleep 0.5
+    tick=$((tick + 1))
+  done
+  return 1
+}
+
+report_failure() {
+  local name=$1 log=$2 why=$3
+  say ""
+  case "$why" in
+    2) say "    ${RED}The $name process exited during startup.${RST}" ;;
+    *) say "    ${RED}The $name did not become ready in time.${RST}" ;;
+  esac
+  if [ -s "$log" ]; then
+    say ""
+    say "${DIM}--- last lines of $log ---${RST}"
+    tail -n 20 "$log" | sed 's/^/    /'
+  else
+    say "    (no output was written to $log)"
+  fi
+  say ""
+}
+
+cleanup() {
+  trap - EXIT INT TERM
+  say ""
+  say "Stopping RouteSafe..."
+  stop_all
+  ok "both servers stopped"
+  say ""
+}
+
+preflight() {
+  command -v node >/dev/null 2>&1 || die "node is not installed."
+  command -v npm  >/dev/null 2>&1 || die "npm is not installed."
+  command -v python3 >/dev/null 2>&1 || die "python3 is not installed."
+  command -v xdg-open >/dev/null 2>&1 || warn "xdg-open missing, open $APP_URL yourself."
+  [ -d "$ROOT/node_modules" ] || die "node_modules is missing. Run: npm install"
+  python3 -c 'import fastapi, uvicorn' 2>/dev/null \
+    || die "backend packages missing. Run: pip install -r backend/requirements.txt"
+  mkdir -p "$LOG_DIR"
+}
+
+start() {
+  head1 "RouteSafe dev runner"
+  say "    project: $ROOT"
+
+  head1 "Preflight"
+  preflight
+  ok "node, npm, python3 and backend packages present"
+
+  head1 "Ports"
+  free_port "$BACKEND_PORT"  "backend"
+  free_port "$FRONTEND_PORT" "frontend"
+  ok "$BACKEND_PORT and $FRONTEND_PORT available"
+
+  head1 "Backend (FastAPI, port $BACKEND_PORT)"
+  setsid python3 -m uvicorn backend.main:app --port "$BACKEND_PORT" \
+    >"$BACKEND_LOG" 2>&1 &
+  BACKEND_PID=$!
+  await_ready backend "$BACKEND_PID" \
+    "curl -sf http://localhost:$BACKEND_PORT/health" 60
+  case $? in
+    0) ok "healthy at http://localhost:$BACKEND_PORT/health" ;;
+    2) report_failure backend "$BACKEND_LOG" died; stop_all; exit 1 ;;
+    *) report_failure backend "$BACKEND_LOG" timeout; stop_all; exit 1 ;;
+  esac
+
+  local health
+  health=$(curl -sf --max-time 5 "http://localhost:$BACKEND_PORT/health" 2>/dev/null)
+  [ -n "$health" ] && say "    $DIM$health$RST"
+
+  head1 "Frontend (Vite, port $FRONTEND_PORT)"
+  setsid npm run dev >"$FRONTEND_LOG" 2>&1 &
+  FRONTEND_PID=$!
+  await_ready frontend "$FRONTEND_PID" \
+    "curl -sf -o /dev/null http://localhost:$FRONTEND_PORT/" 90
+  case $? in
+    0) ok "serving at $APP_URL" ;;
+    2) report_failure frontend "$FRONTEND_LOG" died; stop_all; exit 1 ;;
+    *) report_failure frontend "$FRONTEND_LOG" timeout; stop_all; exit 1 ;;
+  esac
+
+  head1 "Opening the app"
+  if command -v xdg-open >/dev/null 2>&1; then
+    if xdg-open "$APP_URL" >/dev/null 2>&1 & then
+      sleep 0.5
+      ok "browser launched for $APP_URL"
+    else
+      warn "could not launch a browser, open $APP_URL yourself"
+    fi
+  else
+    warn "xdg-open missing, open $APP_URL yourself"
+  fi
+
+  trap cleanup EXIT INT TERM
+
+  say ""
+  say "${B}${GRN}Both servers are running.${RST}"
+  say "${DIM}Tap Travel in the app. Press Ctrl+C here to stop both.${RST}"
+  say "${DIM}Logs: logs/backend.log  logs/frontend.log${RST}"
+  say ""
+  # tail in the background and wait on it: wait is interruptible, so the trap
+  # above runs promptly on Ctrl+C. A foreground tail would block the trap.
+  tail -n 15 -F "$BACKEND_LOG" "$FRONTEND_LOG" &
+  TAIL_PID=$!
+  wait "$TAIL_PID"
+}
+
+usage() {
+  cat <<EOF
+Usage: ./dev [command]
+
+  (no command)  start backend + frontend, open the browser, stream logs
+  stop           stop both servers
+  restart        stop, then start
+  help           this message
+EOF
+}
+
+case "${1:-}" in
+  ""|start) start ;;
+  stop)     head1 "Stopping RouteSafe"; stop_all; ok "both servers stopped"; say "" ;;
+  restart)  head1 "RouteSafe dev runner"; stop_all; say ""; start ;;
+  help|-h|--help) usage ;;
+  *) say "unknown command: $1"; say ""; usage; exit 1 ;;
+esac
