@@ -1,170 +1,177 @@
-# RouteSafe
+#  RouteSafe - Pedestrian Hazard Detection & Dynamic Detour System
 
-## Demo scenario: Mar Aprem Hostel to Nalanchira Main Gate
+> **A smart, community-driven, and AI-assisted pedestrian safety platform built to navigate around stray dog packs and dark street hazards in real time.**
 
-One fixed walking route in Nalanchira, Trivandrum, with a reported dog pack on the road
-outside the **Mar Ivanios College** gate.
+---
 
-There are two ways to reach Nalanchira Main Gate from the hostel behind Mar Baselios College:
+## 📌 Project Overview
 
-| Route | Length | Used when |
-| --- | --- | --- |
-| The road outside the Mar Ivanios College gate | 1011 m | no hazard on that road |
-| Through the Mar Baselios College campus path | 1135 m | a hazard is reported on the Ivanios gate road |
+**RouteSafe** addresses urban pedestrian safety by combining real-time crowdsourced reporting with computer vision detection to calculate dynamic detour routes. Designed around a bounded sandbox in **Nalanchira, Trivandrum**, RouteSafe ensures low-friction hazard logging for pedestrians while maintaining reliable path calculation to navigate around active threats.
 
-RouteSafe sends you **125 m the long way round** through the college to avoid the reported
-pack. Both paths are real pedestrian geometry from OpenStreetMap (ODbL), fetched once and
-embedded as static data, so the demo needs no network at run time.
+---
 
-### Run it
+## ✨ Key Features
 
-One command, from the project root:
+* **⚡ 3-Tap Micro-Reporting System:** Rapid, 5-second hazard logging interface designed to minimize phone distraction while walking in dark or unsafe areas.
+* **🐕 Automated CV Detection Engine:** Powered by a custom **Ultralytics YOLOv8** model fine-tuned to identify stray dog packs from street footage and CCTV feeds.
+* **⏳ Temporal Hazard Decay:** Smart auto-expiring hazard logic (30-minute lifecycle) to ensure old alerts don't permanently block safe streets.
+* **🛡️ Dynamic Rerouting Engine:** Automatically detects active hazard zones, greys out blocked street segments, and highlights high-safety alternate bypasses on the interactive map.
+* **🗺️ Zero-Quota Web Mapping:** Built with **Leaflet.js & OpenStreetMap** for fast, free, and responsive client-side spatial rendering.
 
-```bash
-./dev
-```
+---
 
-That starts the backend and the frontend, waits until both actually answer, opens
-<http://localhost:5173> in your browser, and streams both server logs. Press **Ctrl+C** to
-stop both. Nothing to install: `node_modules` and the Python packages are already in place.
+## 🛠️ System Architecture
 
-| Command | Purpose |
-| --- | --- |
-| `./dev` | Start both, open the browser, stream logs. Ctrl+C stops both. |
-| `./dev stop` | Stop both. Use this if the terminal was closed and the servers were orphaned. |
-| `./dev restart` | Stop, then start again with a freshly seeded hazard. |
+                   ┌─────────────────────────┐
+                   │   Pedestrian UI / Web   │
+                   │ (Leaflet.js + OSM Tiles)│
+                   └────────────┬────────────┘
+                                │
+           ┌────────────────────┴────────────────────┐
+           │                                         │
+    1. 3-Tap Micro-Report                     2. Fetch Safe Route
+           │                                         │
+           ▼                                         ▼
 
-`./dev` reclaims ports 8000 and 5173 first, so running it again after a crash is safe. It
-only reclaims them from processes belonging to this project; if something unrelated holds a
-port it prints what it is and stops rather than killing it.
+┌───────────────────────┐                 ┌───────────────────────┐
+│  POST /api/hazard     │                 │   POST /api/route     │
+└───────────┬───────────┘                 └───────────┬───────────┘
+│                                         │
+└────────────────────┬────────────────────┘
+│
+▼
+┌─────────────────────────┐
+│   FastAPI Engine        │
+│ (Temporal Decay & Logic)│
+└────────────┬────────────┘
+│
+[ Verification Check ]
+│
+┌───────────┴───────────┐
+│                       │
+▼                       ▼
+[ Crowdsourced Report ]   [ Custom YOLOv8 CV Model ]
 
-Server output is also written to `logs/backend.log` and `logs/frontend.log`, which is where to
-look if a server dies.
+---
 
-#### Running the two servers by hand
+## 🚀 Tech Stack
 
-Equivalent to `./dev`, in two terminals from the project root:
+| Domain | Technology |
+| :--- | :--- |
+| **Frontend UI** | HTML5, CSS3, JavaScript (ES6+), Leaflet.js |
+| **Mapping & GIS** | OpenStreetMap (OSM) Tiles |
+| **Backend API** | Python 3.10+, FastAPI, Uvicorn, Pydantic |
+| **Computer Vision** | Ultralytics YOLOv8n, OpenCV, PyTorch |
+| **Dataset & Training**| Roboflow, Google Colab |
 
-```bash
-python3 -m uvicorn backend.main:app --port 8000   # seeds the hazard on startup
-npm run dev                                       # http://localhost:5173
-```
+---
 
-Use `python3 -m uvicorn`; a bare `uvicorn` is not on the PATH. To stop both, press Ctrl+C in
-each terminal, or:
+## 🔌 API Contract Overview
 
-```bash
-pkill -f "uvicorn backend.main"; pkill -f "node.*bin/vite"
-```
+The backend and frontend communicate asynchronously via lightweight JSON contracts.
 
-Open **http://localhost:5173** and tap **Travel**. The route draws itself and the safety
-notice is already on screen: no GPS permission, no typing, no network dependency.
+### 1. Report a Hazard
+* **Endpoint:** `POST /api/hazard`
+* **Payload:**
+  ```json
+  {
+    "lat": 8.5510,
+    "lng": 76.9550,
+    "reason": "Dog Pack",
+    "pack_size": "3-5",
+    "reported_by": "user_3tap"
+  }
 
-### The demo, step by step
+  ---
 
-1. **Travel** shows the amber hazard on the Ivanios gate road and the teal detour through
-   the campus, with "A safer route has been found."
-2. **Report a safety concern** shows the 3-tap flow. If location is denied, tap
-   **Use demo location**.
-3. To show the report changing the route live, clear the seeded alert first:
-   ```bash
-   curl -X POST http://localhost:8000/api/demo/clear    # route goes back to normal, Ivanios road
-   ```
-   Then report a dog pack from the app, go back to **Travel**, and tap **Refresh route**:
-   the route flips to the campus path again.
-4. `curl -X POST http://localhost:8000/api/demo/seed` puts the seeded alert back.
+## 🚀 Tech Stack
 
-### Demo controls
+| Domain | Technology |
+| :--- | :--- |
+| **Frontend UI** | HTML5, CSS3, JavaScript (ES6+), Leaflet.js |
+| **Mapping & GIS** | OpenStreetMap (OSM) Tiles |
+| **Backend API** | Python 3.10+, FastAPI, Uvicorn, Pydantic |
+| **Computer Vision** | Ultralytics YOLOv8n, OpenCV, PyTorch |
+| **Dataset & Training**| Roboflow, Google Colab |
 
-| Endpoint | Effect |
-| --- | --- |
-| `POST /api/demo/clear` | Removes every hazard, so the report flow can be shown from a clean state. |
-| `POST /api/demo/seed` | Re-inserts the Ivanios gate alert and resets it to "reported 3 minutes ago". Idempotent. |
+---
 
-The seed expires after 12 hours rather than the usual 30 minutes, deliberately, so a
-presentation cannot outlive its own hazard.
+## 🔌 API Contract Overview
 
-## Development
+The backend and frontend communicate asynchronously via lightweight JSON contracts.
 
-```bash
-npm install
-cp .env.example .env
-npm run dev              # prints a Local and a Network URL
-```
+### 1. Report a Hazard
+* **Endpoint:** `POST /api/hazard`
+* **Payload:**
+  ```json
+  {
+    "lat": 8.5510,
+    "lng": 76.9550,
+    "reason": "Dog Pack",
+    "pack_size": "3-5",
+    "reported_by": "user_3tap"
+  }
 
-| Env var | Demo value | Purpose |
-| --- | --- | --- |
-| `VITE_DEMO_MODE` | `true` | Pins the app to the fixed scenario. `false` restores real GPS origin and destination search. |
-| `VITE_USE_MOCK_API` | `false` | `true` uses `src/services/mockApi.js` instead of the backend. |
-| `VITE_API_BASE_URL` | `http://localhost:8000` | Backend base URL. |
-| `VITE_REPORT_PATH` | `/api/hazard` | Report endpoint. |
-| `VITE_ROUTE_PATH` | `/api/route` | Route endpoint. |
-| `VITE_ENABLE_GEOCODER` | `true` | Destination search via OpenStreetMap Nominatim. Unused in demo mode. |
+### 2. Calculate Dynamic Route
 
-Restart `npm run dev` after editing `.env`.
+  * **Endpoint: POST /api/route**
 
-To use the app on a phone, open the **Network** URL on the same Wi-Fi. Browsers only allow
-geolocation on HTTPS or localhost, so a phone GPS test needs an HTTPS tunnel
-(`npx localtunnel --port 5173` or ngrok). Demo mode does not use GPS, so this only matters
-once `VITE_DEMO_MODE=false`.
+  * ** Payload:**
 
-## Backend (FastAPI)
+  {
+  "origin": [8.5484, 76.9535],
+  "destination": [8.5540, 76.9570]
+  }
 
-`backend/main.py` implements the hazard + routing contract over a thread-safe in-memory store.
-Hazards expire 30 minutes after they are reported and are pruned lazily on every read.
+  {
+  "route_type": "safe_detour",
+  "has_hazard": true,
+  "hazard_info": {
+    "reason": "Dog Pack",
+    "reported_mins_ago": 4
+  },
+  "blocked_waypoints": [
+    [8.5484, 76.9535],
+    [8.5510, 76.9550]
+  ],
+  "waypoints": [
+    [8.5484, 76.9535],
+    [8.5470, 76.9560],
+    [8.5520, 76.9580],
+    [8.5540, 76.9570]
+  ]
+  }
 
-```bash
-pip install -r backend/requirements.txt
-python3 -m uvicorn backend.main:app --reload --port 8000    # run from the project root
-```
+## ⚙️ Local Development Setup
+* **Prerequisites**
 
-Interactive docs: <http://localhost:8000/docs>
+    Python 3.10+ installed on your system.
 
-### Endpoints
+  ### 1. Clone the repository
+  git clone [https://github.com/your-username/routesafe.git](https://github.com/your-username/routesafe.git)
+  cd routesafe
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/api/hazard` | Report a hazard. Returns `{status, hazard_id, expires_at}`. |
-| `POST` | `/api/route` | Returns `route_type`, `has_hazard`, `hazard_info`, `blocked_waypoints`, `waypoints`, `detour_available`. |
-| `POST` | `/api/demo/seed` | Re-seed the Ivanios gate alert. |
-| `POST` | `/api/demo/clear` | Remove every hazard. |
-| `GET` | `/api/hazards` | Debug: active hazards, each flagged `affects_route`. |
-| `GET` | `/health` | Debug: liveness and active hazard count. |
+  ### 2. Backend Setup
+  # Navigate to backend directory (if separate)
+  cd backend
+  
+  # Install dependencies
+  pip install fastapi uvicorn pydantic
+  
+  # Launch the FastAPI development server
+  uvicorn main:app --reload --port 8000
 
-### Try it
+  - The API will be available locally at: http://localhost:8000
+  - Interactive API Documentation (Swagger UI): http://localhost:8000/docs
+ 
+  ### 3. Frontend Setup
+  - Open the frontend folder.
+  - Launch index.html using Live Server in VS Code (or open it directly in any browser).
 
-```bash
-curl -X POST http://localhost:8000/api/route -H 'Content-Type: application/json' \
-  -d '{"origin":[8.5493890,76.9381227],"destination":[8.5425158,76.9416851]}'
-```
+  ## 🎓 Academic / Proof-of-Concept Scope
+    Sandbox Region: Bounded navigation sandbox centered around Nalanchira, Trivandrum (8.5484° N, 76.9535° E).
+    CV Training Weights: Fine-tuned best.pt model trained on custom annotated dataset targeting dog packs and nighttime hazards.
 
-Add a hazard on the Ivanios gate road and watch the route change:
-
-```bash
-curl -X POST http://localhost:8000/api/hazard -H 'Content-Type: application/json' \
-  -d '{"lat":8.548215,"lng":76.940368,"reason":"Dog Pack","pack_size":"3-5","reported_by":"user_3tap"}'
-```
-
-### Routing rules
-
-Coordinates are always `[latitude, longitude]`.
-
-- **Inside the sandbox:** if both `origin` and `destination` fall within `SANDBOX_BBOX` in
-  `backend/main.py`, the embedded pedestrian geometry is used: `PATH_PRIMARY_DIRECT`
-  (Ivanios gate road), or `PATH_SAFE_DETOUR` (college campus) when a hazard applies.
-- **Everywhere else:** the route is a straight line between `origin` and `destination`, so your
-  destination is always respected. `detour_available` is `false`, because no alternate path is
-  authored for those requests.
-- **Hazards are matched against the path being returned**, within `DETOUR_RADIUS_M` (75 m) of it.
-  A hazard near the campus path therefore does not flag the Ivanios road, and vice versa.
-- `blocked_waypoints` contains the **coordinates that were actually reported**, so the map draws
-  each hazard where it was seen. It is empty when nothing is near the route.
-- `detour_available` tells the UI whether a safer alternative actually exists, so the notice can
-  say "A safer route has been found" or "No safer alternative is available on this route".
-- `hazard_info` describes a single hazard (the most recent one affecting the route). If several
-  apply, every dot shares that one label.
-- `reason` is accepted as free text: `src/utils/constants.js` and `src/services/mockApi.js` disagree on
-  the hazard vocabulary, so a fixed enum would reject reports the UI can actually send.
-- `PATH_BLOCKED_SEGMENT` is kept for reference as the stretch of road the seeded alert sits on;
-  matching is relative to the returned path rather than that fixed line.
-- Storage is in-memory, so hazards reset whenever the server restarts.
+  ## 📜 License
+    This project is open-source and developed for academic demonstration purposes.
+    
